@@ -1,4 +1,4 @@
-package $org.example;
+package $ETU;
 
 /**
  * Hello world!
