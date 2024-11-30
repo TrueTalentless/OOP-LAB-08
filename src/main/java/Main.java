@@ -23,6 +23,127 @@ import net.sf.jasperreports.engine.export.HtmlExporter;
 import net.sf.jasperreports.export.SimpleExporterInput;
 import net.sf.jasperreports.export.SimpleHtmlExporterOutput;
 
+class LoadDataThread implements Runnable {
+    private DefaultTableModel tableModel;
+    private String filePath;
+
+    public LoadDataThread(DefaultTableModel tableModel, String filePath) {
+        this.tableModel = tableModel;
+        this.filePath = filePath;
+    }
+
+    @Override
+    public void run() {
+        synchronized (tableModel) {
+            try {
+                // Загрузка данных из XML в таблицу
+                File file = new File(filePath);
+                DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+                DocumentBuilder builder = factory.newDocumentBuilder();
+                Document doc = builder.parse(file);
+                doc.getDocumentElement().normalize();
+
+                tableModel.setRowCount(0); // Очистка данных таблицы
+
+                NodeList dogList = doc.getElementsByTagName("dog");
+                for (int i = 0; i < dogList.getLength(); i++) {
+                    Node dogNode = dogList.item(i);
+                    if (dogNode.getNodeType() == Node.ELEMENT_NODE) {
+                        Element dogElement = (Element) dogNode;
+                        String name = dogElement.getAttribute("name");
+                        String breed = dogElement.getAttribute("breed");
+                        String owner = dogElement.getAttribute("owner");
+                        String judge = dogElement.getAttribute("judge");
+                        String award = dogElement.getAttribute("award");
+                        tableModel.addRow(new String[]{name, breed, owner, judge, award});
+                    }
+                }
+                tableModel.notify(); // Уведомляем следующий поток
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+}
+
+class SaveDataThread implements Runnable {
+    private DefaultTableModel tableModel;
+    private String filePath;
+
+    public SaveDataThread(DefaultTableModel tableModel, String filePath) {
+        this.tableModel = tableModel;
+        this.filePath = filePath;
+    }
+
+    @Override
+    public void run() {
+        synchronized (tableModel) {
+            try {
+                // Сохранение данных в XML
+                DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+                DocumentBuilder builder = factory.newDocumentBuilder();
+                Document doc = builder.newDocument();
+
+                Element rootElement = doc.createElement("doglist");
+                doc.appendChild(rootElement);
+
+                for (int i = 0; i < tableModel.getRowCount(); i++) {
+                    Element dogElement = doc.createElement("dog");
+                    dogElement.setAttribute("name", (String) tableModel.getValueAt(i, 0));
+                    dogElement.setAttribute("breed", (String) tableModel.getValueAt(i, 1));
+                    dogElement.setAttribute("owner", (String) tableModel.getValueAt(i, 2));
+                    dogElement.setAttribute("judge", (String) tableModel.getValueAt(i, 3));
+                    dogElement.setAttribute("award", (String) tableModel.getValueAt(i, 4));
+                    rootElement.appendChild(dogElement);
+                }
+
+                TransformerFactory transformerFactory = TransformerFactory.newInstance();
+                Transformer transformer = transformerFactory.newTransformer();
+                transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+                DOMSource domSource = new DOMSource(doc);
+                StreamResult streamResult = new StreamResult(new File(filePath));
+                transformer.transform(domSource, streamResult);
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+}
+
+class GenerateReportThread implements Runnable {
+    private DefaultTableModel tableModel;
+    private String reportPath;
+
+    public GenerateReportThread(DefaultTableModel tableModel, String reportPath) {
+        this.tableModel = tableModel;
+        this.reportPath = reportPath;
+    }
+
+    @Override
+    public void run() {
+        try {
+            // Генерация HTML-отчёта
+            String jrxmlPath = "src/main/resources/DogShowReport.jrxml";
+            JasperReport jasperReport = JasperCompileManager.compileReport(jrxmlPath);
+            JRTableModelDataSource dataSource = new JRTableModelDataSource(tableModel);
+
+            HashMap<String, Object> parameters = new HashMap<>();
+            parameters.put("ReportTitle", "Отчет о собаках");
+            parameters.put("Author", "Dog Show Administration");
+
+            JasperPrint jasperPrint = JasperFillManager.fillReport(jasperReport, parameters, dataSource);
+
+            HtmlExporter exporter = new HtmlExporter();
+            exporter.setExporterInput(new SimpleExporterInput(jasperPrint));
+            exporter.setExporterOutput(new SimpleHtmlExporterOutput(reportPath));
+            exporter.exportReport();
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
 
 /**
  * Исключение, выбрасываемое при попытке выполнить действие без выбора строки.
@@ -171,10 +292,14 @@ public class Main {
             @Override
             public void windowClosing(WindowEvent e) {
                 if (unsavedChanges) {
-                    int response = JOptionPane.showConfirmDialog(mainFrame, "Есть несохраненные изменения. Хотите сохранить перед выходом?", "Несохраненные изменения", JOptionPane.YES_NO_CANCEL_OPTION);
+                    int response = JOptionPane.showConfirmDialog(
+                            mainFrame,
+                            "Есть несохраненные изменения. Хотите сохранить перед выходом?",
+                            "Несохраненные изменения",
+                            JOptionPane.YES_NO_CANCEL_OPTION
+                    );
                     if (response == JOptionPane.YES_OPTION) {
                         saveDataToXMLFile();
-                        mainFrame.dispose();
                     } else if (response == JOptionPane.NO_OPTION) {
                         mainFrame.dispose();
                     }
@@ -223,40 +348,16 @@ public class Main {
         int result = fileChooser.showOpenDialog(mainFrame);
 
         if (result == JFileChooser.APPROVE_OPTION) {
-            File file = fileChooser.getSelectedFile();
-            try {
-                DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-                DocumentBuilder builder = factory.newDocumentBuilder();
-                Document doc = builder.parse(file);
-                doc.getDocumentElement().normalize();
-
-                tableModel.setRowCount(0); // Очистка данных таблицы перед загрузкой новых данных
-
-                NodeList dogList = doc.getElementsByTagName("dog");
-                for (int i = 0; i < dogList.getLength(); i++) {
-                    Node dogNode = dogList.item(i);
-                    if (dogNode.getNodeType() == Node.ELEMENT_NODE) {
-                        Element dogElement = (Element) dogNode;
-                        String name = dogElement.getAttribute("name");
-                        String breed = dogElement.getAttribute("breed");
-                        String owner = dogElement.getAttribute("owner");
-                        String judge = dogElement.getAttribute("judge");
-                        String award = dogElement.getAttribute("award");
-
-                        // Добавление строки в таблицу
-                        tableModel.addRow(new String[]{name, breed, owner, judge, award});
-                    }
-                }
-                unsavedChanges = true;
-                JOptionPane.showMessageDialog(mainFrame, "Данные успешно загружены из XML файла");
-
-            } catch (Exception e) {
-                JOptionPane.showMessageDialog(mainFrame, "Ошибка при загрузке данных из XML файла");
-                e.printStackTrace();
-            }
+            File selectedFile = fileChooser.getSelectedFile();
+            Thread loadDataThread = new Thread(() -> {
+                new LoadDataThread(tableModel, selectedFile.getAbsolutePath()).run();
+                SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(mainFrame, "Данные успешно загружены из файла: " + selectedFile.getName()));
+            });
+            loadDataThread.start();
+        } else {
+            JOptionPane.showMessageDialog(mainFrame, "Загрузка отменена.");
         }
     }
-
 
     /**
      * Метод для сохранения данных из таблицы в файл.
@@ -267,44 +368,20 @@ public class Main {
         int result = fileChooser.showSaveDialog(mainFrame);
 
         if (result == JFileChooser.APPROVE_OPTION) {
-            File file = fileChooser.getSelectedFile();
-            try {
-                DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-                DocumentBuilder builder = factory.newDocumentBuilder();
-                Document doc = builder.newDocument();
-
-                // Создание корневого элемента doglist
-                Element rootElement = doc.createElement("doglist");
-                doc.appendChild(rootElement);
-
-                // Добавление элементов dog в корневой элемент
-                for (int i = 0; i < tableModel.getRowCount(); i++) {
-                    Element dogElement = doc.createElement("dog");
-                    dogElement.setAttribute("name", (String) tableModel.getValueAt(i, 0));
-                    dogElement.setAttribute("breed", (String) tableModel.getValueAt(i, 1));
-                    dogElement.setAttribute("owner", (String) tableModel.getValueAt(i, 2));
-                    dogElement.setAttribute("judge", (String) tableModel.getValueAt(i, 3));
-                    dogElement.setAttribute("award", (String) tableModel.getValueAt(i, 4));
-                    rootElement.appendChild(dogElement);
-                }
-
-                // Настройка и выполнение трансформации для записи в файл
-                TransformerFactory transformerFactory = TransformerFactory.newInstance();
-                Transformer transformer = transformerFactory.newTransformer();
-                transformer.setOutputProperty(OutputKeys.INDENT, "yes");
-                DOMSource domSource = new DOMSource(doc);
-                StreamResult streamResult = new StreamResult(file);
-                transformer.transform(domSource, streamResult);
-
-                unsavedChanges = false;
-                JOptionPane.showMessageDialog(mainFrame, "Данные успешно сохранены в XML файл");
-
-            } catch (Exception e) {
-                JOptionPane.showMessageDialog(mainFrame, "Ошибка при сохранении данных в XML файл");
-                e.printStackTrace();
-            }
+            File selectedFile = fileChooser.getSelectedFile();
+            Thread saveDataThread = new Thread(() -> {
+                new SaveDataThread(tableModel, selectedFile.getAbsolutePath()).run();
+                SwingUtilities.invokeLater(() -> {
+                    JOptionPane.showMessageDialog(mainFrame, "Данные успешно сохранены в файл: " + selectedFile.getName());
+                    unsavedChanges = false; // Сбрасываем флаг после сохранения
+                });
+            });
+            saveDataThread.start();
+        } else {
+            JOptionPane.showMessageDialog(mainFrame, "Сохранение отменено.");
         }
     }
+
 
     /**
      * Генерирует HTML-отчет на основе данных таблицы.
@@ -314,39 +391,13 @@ public class Main {
      * Обрабатывает возможные ошибки при создании отчета.
      */
     private void generateHtmlReport() {
-        try {
-            // Путь к шаблону отчета
-            String jrxmlPath = "src/main/resources/DogShowReport.jrxml";
-
-            // Компиляция шаблона отчета
-            JasperReport jasperReport = JasperCompileManager.compileReport(jrxmlPath);
-
-            // Подготовка данных для отчета из таблицы
-            JRTableModelDataSource dataSource = new JRTableModelDataSource(tableModel);
-
-            // Параметры для отчета
-            HashMap<String, Object> parameters = new HashMap<>();
-            parameters.put("ReportTitle", "Отчет о собаках");
-            parameters.put("Author", "Dog Show Administration");
-
-            // Заполнение отчета
-            JasperPrint jasperPrint = JasperFillManager.fillReport(jasperReport, parameters, dataSource);
-
-            // Генерация HTML-отчета
-            String outputFilePath = "DogShowReport.html";
-            HtmlExporter exporter = new HtmlExporter();
-            exporter.setExporterInput(new SimpleExporterInput(jasperPrint));
-            exporter.setExporterOutput(new SimpleHtmlExporterOutput(outputFilePath));
-
-            exporter.exportReport();
-
-            JOptionPane.showMessageDialog(mainFrame, "HTML-отчет успешно создан: " + outputFilePath);
-        } catch (Exception e) {
-            e.printStackTrace();
-            JOptionPane.showMessageDialog(mainFrame, "Ошибка при создании отчета: " + e.getMessage());
-        }
+        String reportPath = "DogShowReport.html"; // Фиксированный путь для отчёта
+        Thread generateReportThread = new Thread(() -> {
+            new GenerateReportThread(tableModel, reportPath).run();
+            SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(mainFrame, "Отчет успешно создан: " + reportPath));
+        });
+        generateReportThread.start();
     }
-
 
     /**
      * Метод проверки, выбрана ли строка в таблице для удаления.
